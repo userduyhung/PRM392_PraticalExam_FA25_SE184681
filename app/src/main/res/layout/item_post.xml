@@ -28,7 +28,7 @@
                 android:id="@+id/item_image"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:contentDescription="Post image"
+                android:contentDescription="Book image"
                 android:scaleType="centerCrop"
                 android:background="#E0E0E0" />
 
@@ -55,7 +55,7 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="Post Title"
+                    android:text="Book Title"
                     android:textColor="#212121"
                     android:textSize="16sp"
                     android:textStyle="bold"
@@ -78,7 +78,7 @@
                 android:id="@+id/item_body"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Post body preview..."
+                android:text="Book description preview..."
                 android:textColor="#757575"
                 android:textSize="14sp"
                 android:maxLines="2"

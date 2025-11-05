@@ -23,7 +23,9 @@
 
     <!-- Chip colors -->
     <color name="chip_background">#E3F2FD</color>
+    <color name="chip_background_checked">#2196F3</color>
     <color name="chip_text">#1976D2</color>
+    <color name="chip_text_checked">#FFFFFF</color>
 
     <!-- Card colors -->
     <color name="card_background">#FFFFFF</color>

@@ -234,20 +234,27 @@ public class PostRepository {
     public void toggleFavorite(Post post, FavoriteCallback callback) {
         executorService.execute(() -> {
             try {
-                post.setFavorite(!post.isFavorite());
-                postDao.update(post);
-
-                if (callback != null) {
-                    callback.onSuccess(post.isFavorite());
+                // Read current stored value to avoid race conditions or stale objects
+                Post current = postDao.getPostByIdSync(post.getId());
+                if (current == null) {
+                    // Fall back to toggling the passed post if DB record missing
+                    boolean newState = !post.isFavorite();
+                    postDao.updateFavoriteStatus(post.getId(), newState);
+                    if (callback != null) callback.onSuccess(newState);
+                } else {
+                    boolean newState = !current.isFavorite();
+                    // Update only the favorite column to avoid overwriting other fields
+                    postDao.updateFavoriteStatus(current.getId(), newState);
+                    if (callback != null) callback.onSuccess(newState);
                 }
-            } catch (Exception e) {
-                Log.e(TAG, "Error toggling favorite", e);
-                if (callback != null) {
-                    callback.onError(e.getMessage());
-                }
-            }
-        });
-    }
+             } catch (Exception e) {
+                 Log.e(TAG, "Error toggling favorite", e);
+                 if (callback != null) {
+                     callback.onError(e.getMessage());
+                 }
+             }
+         });
+     }
 
     // Callback interfaces
     public interface FetchCallback {
@@ -264,4 +271,3 @@ public class PostRepository {
         void onResult(boolean isEmpty);
     }
 }
-

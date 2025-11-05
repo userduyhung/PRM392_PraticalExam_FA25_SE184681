@@ -22,7 +22,7 @@
         android:layout_height="wrap_content"
         android:layout_gravity="center"
         android:padding="16dp"
-        android:text="Error loading post"
+        android:text="Error loading book"
         android:textColor="#D32F2F"
         android:textSize="16sp"
         android:visibility="gone" />
@@ -51,10 +51,9 @@
                     android:id="@+id/detail_image"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
-                    android:contentDescription="Post image"
+                    android:contentDescription="Book cover image"
                     android:scaleType="centerCrop"
-                    android:background="#E0E0E0"
-                    android:src="@android:drawable/ic_menu_gallery" />
+                    android:src="@drawable/ic_placeholder" />
 
             </androidx.cardview.widget.CardView>
 
@@ -84,7 +83,7 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:text="Post Title"
+                            android:text="Book Title"
                             android:textColor="#212121"
                             android:textSize="22sp"
                             android:textStyle="bold"
@@ -128,7 +127,7 @@
                         android:id="@+id/detail_user_id"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Posted by User #1"
+                        android:text="Author ID: #1"
                         android:textColor="#757575"
                         android:textSize="14sp"
                         android:drawableStart="@android:drawable/ic_menu_myplaces"
@@ -139,7 +138,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="Content"
+                        android:text="Description"
                         android:textColor="#424242"
                         android:textSize="16sp"
                         android:textStyle="bold"
@@ -149,7 +148,7 @@
                         android:id="@+id/detail_body"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="Post body content goes here..."
+                        android:text="Book description goes here..."
                         android:textColor="#616161"
                         android:textSize="15sp"
                         android:lineSpacingExtra="4dp" />
@@ -177,7 +176,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="📌 Post Information"
+                        android:text="📚 Book Information"
                         android:textColor="#424242"
                         android:textSize="16sp"
                         android:textStyle="bold"
@@ -186,7 +185,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="• This post is cached locally for offline viewing"
+                        android:text="• This book is cached locally for offline viewing"
                         android:textColor="#757575"
                         android:textSize="14sp"
                         android:layout_marginBottom="4dp" />

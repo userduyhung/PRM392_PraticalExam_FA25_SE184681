@@ -1,7 +1,12 @@
 package com.example.nguyenduyhung_se184681;
 
+import android.app.Dialog;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.os.Bundle;
 import android.view.View;
+import android.view.Window;
+import android.view.WindowManager;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.ProgressBar;
@@ -18,10 +23,10 @@ import com.example.nguyenduyhung_se184681.repository.PostRepository;
 import com.example.nguyenduyhung_se184681.viewmodel.PostViewModel;
 
 /**
- * Detail Activity - Shows complete details for a selected post
+ * Detail Activity - Shows complete details for a selected book
  * Features:
- * - Receives post ID as intent extra
- * - Displays all post details (title, body, REAL image, category, user ID)
+ * - Receives book ID as intent extra
+ * - Displays all book details (title, body, REAL image, category, user ID)
  * - Toggle favorite button with immediate state update
  * - Back button to return to main screen
  */
@@ -58,7 +63,7 @@ public class DetailActivity extends AppCompatActivity {
         int postId = getIntent().getIntExtra(EXTRA_POST_ID, -1);
 
         if (postId == -1) {
-            showError("Invalid post ID");
+            showError("Invalid book ID");
             return;
         }
 
@@ -68,7 +73,7 @@ public class DetailActivity extends AppCompatActivity {
         // Setup back button
         if (getSupportActionBar() != null) {
             getSupportActionBar().setDisplayHomeAsUpEnabled(true);
-            getSupportActionBar().setTitle("Post Details");
+            getSupportActionBar().setTitle("Book Details");
         }
     }
 
@@ -85,6 +90,13 @@ public class DetailActivity extends AppCompatActivity {
 
         // Setup favorite button click listener
         favoriteButton.setOnClickListener(v -> toggleFavorite());
+
+        // Setup image click listener for full-screen view
+        imageView.setOnClickListener(v -> {
+            if (currentPost != null && currentPost.getImageUrl() != null) {
+                showFullScreenImage(currentPost.getImageUrl());
+            }
+        });
     }
 
     private void loadPostData(int postId) {
@@ -97,7 +109,7 @@ public class DetailActivity extends AppCompatActivity {
                 displayPostData(post);
                 hideLoading();
             } else {
-                showError("Post not found");
+                showError("Book not found");
             }
         });
     }
@@ -113,18 +125,18 @@ public class DetailActivity extends AppCompatActivity {
         categoryTextView.setText("Category: " + post.getCategory());
 
         // Display user ID
-        userIdTextView.setText("Posted by User #" + post.getUserId());
+        userIdTextView.setText("Author ID: #" + post.getUserId());
 
         // Update favorite button state
         updateFavoriteButton(post.isFavorite());
 
-        // Load REAL image using Glide
+        // Load REAL image using Glide with improved configuration
         Glide.with(this)
                 .load(post.getImageUrl())
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
                 .placeholder(R.drawable.ic_placeholder)
                 .error(R.drawable.ic_placeholder)
-                .centerCrop()
+                .fitCenter() // Better than centerCrop for detail view
                 .into(imageView);
 
         // Show content
@@ -199,6 +211,76 @@ public class DetailActivity extends AppCompatActivity {
         // Handle back button press
         finish();
         return true;
+    }
+
+    /**
+     * Show full-screen image viewer dialog
+     * User can close by clicking X button or clicking anywhere on screen
+     */
+    private void showFullScreenImage(String imageUrl) {
+        // Create full-screen dialog
+        Dialog dialog = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        dialog.setContentView(R.layout.dialog_image_viewer);
+        dialog.setCancelable(true); // Allow dismissing with back button
+        dialog.setCanceledOnTouchOutside(true); // Allow dismissing by touching outside
+
+        // Make dialog background transparent and full screen
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setLayout(WindowManager.LayoutParams.MATCH_PARENT,
+                           WindowManager.LayoutParams.MATCH_PARENT);
+            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                          WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        }
+
+        // Get views from dialog
+        ImageView fullscreenImage = dialog.findViewById(R.id.fullscreen_image);
+        ImageButton closeButton = dialog.findViewById(R.id.close_button);
+        ProgressBar loadingProgress = dialog.findViewById(R.id.image_loading_progress);
+        View dialogRoot = dialog.findViewById(R.id.dialog_root);
+
+        // Load high-quality image with Glide
+        loadingProgress.setVisibility(View.VISIBLE);
+        Glide.with(this)
+                .load(imageUrl)
+                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .fitCenter() // Full image, high quality
+                .error(R.drawable.ic_placeholder)
+                .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
+                    @Override
+                    public boolean onLoadFailed(com.bumptech.glide.load.engine.GlideException e,
+                                               Object model,
+                                               com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
+                                               boolean isFirstResource) {
+                        loadingProgress.setVisibility(View.GONE);
+                        Toast.makeText(DetailActivity.this, "Failed to load image", Toast.LENGTH_SHORT).show();
+                        return false;
+                    }
+
+                    @Override
+                    public boolean onResourceReady(android.graphics.drawable.Drawable resource,
+                                                  Object model,
+                                                  com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
+                                                  com.bumptech.glide.load.DataSource dataSource,
+                                                  boolean isFirstResource) {
+                        loadingProgress.setVisibility(View.GONE);
+                        return false;
+                    }
+                })
+                .into(fullscreenImage);
+
+        // Simple approach: Click anywhere to dismiss
+        View.OnClickListener dismissListener = v -> dialog.dismiss();
+
+        closeButton.setOnClickListener(dismissListener);
+        dialogRoot.setOnClickListener(dismissListener);
+        fullscreenImage.setOnClickListener(dismissListener);
+
+
+        // Show dialog
+        dialog.show();
     }
 
     @Override

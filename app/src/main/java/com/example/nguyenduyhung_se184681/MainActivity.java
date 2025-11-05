@@ -58,11 +58,29 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
     private String currentSearchQuery = "";
     private Set<String> selectedCategories = new HashSet<>();
     private boolean showFavoritesOnly = false;
+    // Keep reference to currently observed LiveData so we can remove observers cleanly
+    private androidx.lifecycle.LiveData<java.util.List<Post>> activePostsLiveData = null;
+    // Keep reference to category "All" chip to avoid ID conflict with filter "All" chip
+    private Chip categoryAllChip = null;
+    // Cache all posts to avoid re-observing LiveData
+    private List<Post> allPostsCache = new ArrayList<>();
+    private boolean isLiveDataObserved = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        // Restore state if available
+        if (savedInstanceState != null) {
+            ArrayList<String> savedCategories = savedInstanceState.getStringArrayList("selectedCategories");
+            if (savedCategories != null) {
+                selectedCategories = new HashSet<>(savedCategories);
+                android.util.Log.d("MainActivity", "Restored selectedCategories from savedInstanceState: " + selectedCategories);
+            }
+            showFavoritesOnly = savedInstanceState.getBoolean("showFavoritesOnly", false);
+            currentSearchQuery = savedInstanceState.getString("currentSearchQuery", "");
+        }
 
         // Initialize ViewModel
         viewModel = new ViewModelProvider(this).get(PostViewModel.class);
@@ -110,6 +128,7 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
     }
 
     private void setupSearch() {
+        // Real-time search as user types
         searchEditText.addTextChangedListener(new TextWatcher() {
             @Override
             public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
@@ -123,16 +142,66 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
             @Override
             public void afterTextChanged(Editable s) {}
         });
+
+        // Add Enter key action to perform search and hide keyboard
+        searchEditText.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH ||
+                actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE ||
+                (event != null && event.getKeyCode() == android.view.KeyEvent.KEYCODE_ENTER)) {
+
+                // Hide keyboard
+                android.view.inputmethod.InputMethodManager imm =
+                    (android.view.inputmethod.InputMethodManager) getSystemService(android.content.Context.INPUT_METHOD_SERVICE);
+                if (imm != null) {
+                    imm.hideSoftInputFromWindow(searchEditText.getWindowToken(), 0);
+                }
+
+                // Perform search
+                currentSearchQuery = searchEditText.getText().toString().trim();
+                applyFilters();
+
+                return true;
+            }
+            return false;
+        });
     }
 
     private void setupFilters() {
         // Setup All/Favorites filter
         filterChipGroup.setOnCheckedStateChangeListener((group, checkedIds) -> {
-            if (checkedIds.isEmpty()) return;
+            // If no chips are checked, keep current state (don't change anything)
+            if (checkedIds.isEmpty()) {
+                // Restore the previously selected chip
+                if (showFavoritesOnly) {
+                    filterChipGroup.check(R.id.chip_favorites);
+                } else {
+                    filterChipGroup.check(R.id.chip_all);
+                }
+                return;
+            }
 
             int checkedId = checkedIds.get(0);
-            showFavoritesOnly = checkedId == R.id.chip_favorites;
-            applyFilters();
+            boolean newShowFavoritesOnly = checkedId == R.id.chip_favorites;
+
+            // Only update if state actually changed
+            if (newShowFavoritesOnly != showFavoritesOnly) {
+                showFavoritesOnly = newShowFavoritesOnly;
+
+                // Reset observation flag when switching data source
+                isLiveDataObserved = false;
+
+                // Hide category filters when Favorites is selected
+                View categoryScrollView = findViewById(R.id.category_scroll_view);
+                if (categoryScrollView != null) {
+                    if (showFavoritesOnly) {
+                        categoryScrollView.setVisibility(View.GONE);
+                    } else {
+                        categoryScrollView.setVisibility(View.VISIBLE);
+                    }
+                }
+
+                applyFilters();
+            }
         });
 
         // Load and setup category filters
@@ -144,9 +213,9 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
             if (categories != null && !categories.isEmpty()) {
                 categoryChipGroup.removeAllViews();
 
-                // Add "All" category chip
-                Chip allChip = createCategoryChip("All", true);
-                categoryChipGroup.addView(allChip);
+                // Add "All" category chip and store reference to avoid ID conflict
+                categoryAllChip = createCategoryChip("All", true);
+                categoryChipGroup.addView(categoryAllChip);
 
                 // Add category chips from data
                 for (String category : categories) {
@@ -162,21 +231,37 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
         chip.setText(category);
         chip.setCheckable(true);
         chip.setChecked(isChecked);
-        chip.setChipBackgroundColorResource(R.color.chip_background);
-        chip.setTextColor(getResources().getColor(R.color.chip_text, null));
+
+        // Remove the default checkmark icon to avoid showing 2 checkmarks
+        chip.setCheckedIcon(null);
+        chip.setChipIconVisible(false);
+
+        // Set colors based on checked state
+        updateChipColors(chip, isChecked);
 
         chip.setOnCheckedChangeListener((buttonView, isCheckedNow) -> {
             // Prevent recursive calls
             if (!buttonView.isPressed()) return;
 
-            if (category.equals("All")) {
+            // Update chip colors when state changes
+            updateChipColors(chip, isCheckedNow);
+
+            // Use safe equals to avoid NPE
+            boolean isAll = "All".equals(category);
+
+            if (isAll) {
                 // "All" chip behavior: clear all selections and reset to all
                 if (isCheckedNow) {
                     // Uncheck all other chips
                     for (int i = 0; i < categoryChipGroup.getChildCount(); i++) {
-                        Chip otherChip = (Chip) categoryChipGroup.getChildAt(i);
-                        if (otherChip != chip && otherChip.isChecked()) {
-                            otherChip.setChecked(false);
+                        View child = categoryChipGroup.getChildAt(i);
+                        if (child instanceof Chip) {
+                            Chip otherChip = (Chip) child;
+                            if (otherChip != chip && otherChip.isChecked()) {
+                                otherChip.setChecked(false);
+                                // Manually update colors for programmatically unchecked chips
+                                updateChipColors(otherChip, false);
+                            }
                         }
                     }
                     selectedCategories.clear();
@@ -184,15 +269,18 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
                     // "All" cannot be unchecked manually - keep it checked if nothing else is selected
                     if (selectedCategories.isEmpty()) {
                         chip.setChecked(true);
+                        // Manually update colors
+                        updateChipColors(chip, true);
                     }
                 }
             } else {
                 // Regular category chip behavior
                 if (isCheckedNow) {
-                    // Uncheck "All" when selecting a specific category
-                    Chip allChip = (Chip) categoryChipGroup.getChildAt(0);
-                    if (allChip.isChecked()) {
-                        allChip.setChecked(false);
+                    // Uncheck "All" when selecting a specific category - use stored reference
+                    if (categoryAllChip != null && categoryAllChip.isChecked()) {
+                        categoryAllChip.setChecked(false);
+                        // Manually update colors since programmatic setChecked might not trigger listener
+                        updateChipColors(categoryAllChip, false);
                     }
                     // Add to selected categories
                     selectedCategories.add(category);
@@ -202,8 +290,11 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
 
                     // If no categories selected, check "All"
                     if (selectedCategories.isEmpty()) {
-                        Chip allChip = (Chip) categoryChipGroup.getChildAt(0);
-                        allChip.setChecked(true);
+                        if (categoryAllChip != null) {
+                            categoryAllChip.setChecked(true);
+                            // Manually update colors
+                            updateChipColors(categoryAllChip, true);
+                        }
                     }
                 }
             }
@@ -212,6 +303,147 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
         });
 
         return chip;
+    }
+
+    /**
+     * Update chip colors based on checked state
+     * Checked: blue background, white text
+     * Unchecked: light blue background, dark blue text
+     */
+    private void updateChipColors(Chip chip, boolean isChecked) {
+        if (isChecked) {
+            chip.setChipBackgroundColorResource(R.color.chip_background_checked);
+            chip.setTextColor(getResources().getColor(R.color.chip_text_checked, null));
+        } else {
+            chip.setChipBackgroundColorResource(R.color.chip_background);
+            chip.setTextColor(getResources().getColor(R.color.chip_text, null));
+        }
+    }
+
+    /**
+     * Restore category chip visual states based on selectedCategories
+     * Called when returning from Detail screen to ensure chips show correct colors
+     * Temporarily removes listener to avoid triggering logic that checks isPressed()
+     */
+    private void restoreCategoryChipStates() {
+        if (categoryChipGroup == null) {
+            android.util.Log.d("MainActivity", "restoreCategoryChipStates: categoryChipGroup is null");
+            return;
+        }
+
+        int chipCount = categoryChipGroup.getChildCount();
+        android.util.Log.d("MainActivity", "restoreCategoryChipStates: chipCount=" + chipCount + ", selectedCategories=" + selectedCategories);
+
+        if (chipCount == 0) {
+            // No chips created yet, skip restore (will be handled by loadCategories observer)
+            android.util.Log.d("MainActivity", "restoreCategoryChipStates: No chips yet, skipping");
+            return;
+        }
+
+        for (int i = 0; i < chipCount; i++) {
+            View child = categoryChipGroup.getChildAt(i);
+            if (child instanceof Chip) {
+                Chip chip = (Chip) child;
+                String chipText = chip.getText().toString();
+
+                if ("All".equals(chipText)) {
+                    // "All" should be checked only if no categories selected
+                    boolean shouldBeChecked = selectedCategories.isEmpty();
+                    android.util.Log.d("MainActivity", "Chip 'All': currentChecked=" + chip.isChecked() + ", shouldBe=" + shouldBeChecked);
+                    if (chip.isChecked() != shouldBeChecked) {
+                        // Remove listener temporarily to avoid triggering OnCheckedChangeListener
+                        chip.setOnCheckedChangeListener(null);
+                        chip.setChecked(shouldBeChecked);
+                        updateChipColors(chip, shouldBeChecked);
+                        // Restore listener
+                        restoreChipListener(chip, chipText, shouldBeChecked);
+                        android.util.Log.d("MainActivity", "Chip 'All' updated to " + shouldBeChecked);
+                    }
+                } else {
+                    // Regular category chip
+                    boolean shouldBeChecked = selectedCategories.contains(chipText);
+                    android.util.Log.d("MainActivity", "Chip '" + chipText + "': currentChecked=" + chip.isChecked() + ", shouldBe=" + shouldBeChecked);
+                    if (chip.isChecked() != shouldBeChecked) {
+                        // Remove listener temporarily to avoid triggering OnCheckedChangeListener
+                        chip.setOnCheckedChangeListener(null);
+                        chip.setChecked(shouldBeChecked);
+                        updateChipColors(chip, shouldBeChecked);
+                        // Restore listener
+                        restoreChipListener(chip, chipText, shouldBeChecked);
+                        android.util.Log.d("MainActivity", "Chip '" + chipText + "' updated to " + shouldBeChecked);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Restore the OnCheckedChangeListener for a category chip
+     * This is the same listener logic from createCategoryChip()
+     */
+    private void restoreChipListener(Chip chip, String category, boolean currentCheckedState) {
+        chip.setOnCheckedChangeListener((buttonView, isCheckedNow) -> {
+            // Prevent recursive calls
+            if (!buttonView.isPressed()) return;
+
+            // Update chip colors when state changes
+            updateChipColors(chip, isCheckedNow);
+
+            // Use safe equals to avoid NPE
+            boolean isAll = "All".equals(category);
+
+            if (isAll) {
+                // "All" chip behavior: clear all selections and reset to all
+                if (isCheckedNow) {
+                    // Uncheck all other chips
+                    for (int i = 0; i < categoryChipGroup.getChildCount(); i++) {
+                        View child = categoryChipGroup.getChildAt(i);
+                        if (child instanceof Chip) {
+                            Chip otherChip = (Chip) child;
+                            if (otherChip != chip && otherChip.isChecked()) {
+                                otherChip.setChecked(false);
+                                // Manually update colors for programmatically unchecked chips
+                                updateChipColors(otherChip, false);
+                            }
+                        }
+                    }
+                    selectedCategories.clear();
+                } else {
+                    // "All" cannot be unchecked manually - keep it checked if nothing else is selected
+                    if (selectedCategories.isEmpty()) {
+                        chip.setChecked(true);
+                        // Manually update colors
+                        updateChipColors(chip, true);
+                    }
+                }
+            } else {
+                // Regular category chip behavior
+                if (isCheckedNow) {
+                    // Uncheck "All" when selecting a specific category - use stored reference
+                    if (categoryAllChip != null && categoryAllChip.isChecked()) {
+                        categoryAllChip.setChecked(false);
+                        // Manually update colors since programmatic setChecked might not trigger listener
+                        updateChipColors(categoryAllChip, false);
+                    }
+                    // Add to selected categories
+                    selectedCategories.add(category);
+                } else {
+                    // Remove from selected categories
+                    selectedCategories.remove(category);
+
+                    // If no categories selected, check "All"
+                    if (selectedCategories.isEmpty()) {
+                        if (categoryAllChip != null) {
+                            categoryAllChip.setChecked(true);
+                            // Manually update colors
+                            updateChipColors(categoryAllChip, true);
+                        }
+                    }
+                }
+            }
+
+            applyFilters();
+        });
     }
 
     private void loadData() {
@@ -284,7 +516,7 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
     }
 
     private void applyFilters() {
-        LiveData<List<Post>> postsLiveData;
+        androidx.lifecycle.LiveData<List<Post>> postsLiveData;
 
         // Choose the base data source
         if (showFavoritesOnly) {
@@ -293,51 +525,84 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
             postsLiveData = viewModel.getAllPosts();
         }
 
-        // Remove previous observers to prevent multiple updates
-        postsLiveData.removeObservers(this);
+        // Check if we need to switch LiveData source
+        boolean needToSwitchSource = (activePostsLiveData != postsLiveData);
 
-        // Observe and update UI
-        postsLiveData.observe(this, posts -> {
-            if (posts == null) {
-                showError("No posts available");
-                return;
+        if (needToSwitchSource) {
+            // Remove observers from previously observed LiveData (if any)
+            if (activePostsLiveData != null) {
+                activePostsLiveData.removeObservers(this);
             }
 
-            List<Post> filteredPosts = new ArrayList<>(posts);
+            // Track the currently active LiveData
+            activePostsLiveData = postsLiveData;
+            isLiveDataObserved = false;
+        }
 
-            // Apply category filter (client-side for multiple categories)
-            if (!selectedCategories.isEmpty()) {
-                filteredPosts = filteredPosts.stream()
-                        .filter(post -> selectedCategories.contains(post.getCategory()))
-                        .collect(Collectors.toList());
-            }
+        // Only observe if not already observed
+        if (!isLiveDataObserved) {
+            isLiveDataObserved = true;
 
-            // Apply search filter
-            if (!currentSearchQuery.isEmpty()) {
-                String query = currentSearchQuery.toLowerCase();
-                filteredPosts = filteredPosts.stream()
-                        .filter(post ->
-                                post.getTitle().toLowerCase().contains(query) ||
-                                post.getBody().toLowerCase().contains(query))
-                        .collect(Collectors.toList());
-            }
-
-            // Update UI based on results
-            if (!filteredPosts.isEmpty()) {
-                adapter.setPosts(filteredPosts);
-                showContent();
-            } else {
-                if (showFavoritesOnly) {
-                    showError("No favorites yet.\nTap the star on any post to add it to favorites!");
-                } else if (!currentSearchQuery.isEmpty()) {
-                    showError("No posts found for \"" + currentSearchQuery + "\"");
-                } else if (!selectedCategories.isEmpty()) {
-                    showError("No posts found in selected categories");
-                } else {
-                    showError("No posts available");
+            // Observe and cache posts
+            postsLiveData.observe(this, posts -> {
+                if (posts != null) {
+                    // Update cache
+                    allPostsCache = new ArrayList<>(posts);
+                    // Apply filters with new data
+                    filterAndDisplayPosts();
                 }
+            });
+        } else {
+            // Already observing, just apply filters to cached data
+            filterAndDisplayPosts();
+        }
+    }
+
+    /**
+     * Filter cached posts based on current state and update UI
+     * This method does NOT re-observe LiveData, preserving selection state
+     */
+    private void filterAndDisplayPosts() {
+        if (allPostsCache.isEmpty()) {
+            showError("No books available");
+            return;
+        }
+
+        List<Post> filteredPosts = new ArrayList<>(allPostsCache);
+
+        // Apply category filter (client-side for multiple categories)
+        if (!selectedCategories.isEmpty()) {
+            filteredPosts = filteredPosts.stream()
+                    .filter(post -> selectedCategories.contains(post.getCategory()))
+                    .collect(Collectors.toList());
+        }
+
+        // Apply search filter (search by book title only - null-safe and case-insensitive)
+        if (!currentSearchQuery.isEmpty()) {
+            String query = currentSearchQuery.toLowerCase();
+            filteredPosts = filteredPosts.stream()
+                    .filter(post -> {
+                        String title = post.getTitle() != null ? post.getTitle().toLowerCase() : "";
+                        return title.contains(query);
+                    })
+                    .collect(Collectors.toList());
+        }
+
+        // Update UI based on results
+        if (!filteredPosts.isEmpty()) {
+            adapter.setPosts(filteredPosts);
+            showContent();
+        } else {
+            if (showFavoritesOnly) {
+                showError("No favorites yet.\nTap the star on any book to add it to favorites!");
+            } else if (!currentSearchQuery.isEmpty()) {
+                showError("No books found for \"" + currentSearchQuery + "\"");
+            } else if (!selectedCategories.isEmpty()) {
+                showError("No books found in selected categories");
+            } else {
+                showError("No books available");
             }
-        });
+        }
     }
 
     @Override
@@ -370,5 +635,27 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
         errorTextView.setVisibility(View.VISIBLE);
         errorTextView.setText(message);
     }
-}
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        android.util.Log.d("MainActivity", "onResume called, selectedCategories=" + selectedCategories);
+
+        // Restore category chip visual states when returning from DetailActivity
+        // Use postDelayed to ensure UI is fully rendered before restoring
+        recyclerView.postDelayed(() -> {
+            android.util.Log.d("MainActivity", "About to restore chip states");
+            restoreCategoryChipStates();
+        }, 100);
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        // Save current state to survive activity recreation
+        outState.putStringArrayList("selectedCategories", new ArrayList<>(selectedCategories));
+        outState.putBoolean("showFavoritesOnly", showFavoritesOnly);
+        outState.putString("currentSearchQuery", currentSearchQuery);
+        android.util.Log.d("MainActivity", "Saved state: selectedCategories=" + selectedCategories);
+    }
+}

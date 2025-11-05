@@ -16,13 +16,9 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.example.nguyenduyhung_se184681.adapter.PostAdapter;
 import com.example.nguyenduyhung_se184681.model.Post;
 import com.example.nguyenduyhung_se184681.viewmodel.PostViewModel;
-import com.google.android.material.chip.Chip;
-import com.google.android.material.chip.ChipGroup;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -31,7 +27,6 @@ import java.util.stream.Collectors;
  * - Displays only favorited posts (from database only, no network calls)
  * - Real-time updates when favorites are added/removed from Detail Screen
  * - Search bar for filtering favorites
- * - Category filters (dynamically generated from favorite posts)
  * - Empty state message when no favorites exist
  * - Navigation to detail screen on item click
  */
@@ -44,12 +39,11 @@ public class FavoritesActivity extends AppCompatActivity implements PostAdapter.
     private RecyclerView recyclerView;
     private TextView emptyStateTextView;
     private EditText searchEditText;
-    private ChipGroup categoryChipGroup;
+    private View searchCardView; // Card containing search bar
 
     // State
     private List<Post> allFavorites = new ArrayList<>();
     private String currentSearchQuery = "";
-    private Set<String> selectedCategories = new HashSet<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -82,7 +76,7 @@ public class FavoritesActivity extends AppCompatActivity implements PostAdapter.
         recyclerView = findViewById(R.id.favorites_recycler_view);
         emptyStateTextView = findViewById(R.id.favorites_empty_state);
         searchEditText = findViewById(R.id.favorites_search_edit_text);
-        categoryChipGroup = findViewById(R.id.favorites_category_chip_group);
+        searchCardView = findViewById(R.id.favorites_search_card);
     }
 
     private void setupRecyclerView() {
@@ -93,6 +87,7 @@ public class FavoritesActivity extends AppCompatActivity implements PostAdapter.
     }
 
     private void setupSearch() {
+        // Real-time search as user types
         searchEditText.addTextChangedListener(new TextWatcher() {
             @Override
             public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
@@ -106,6 +101,28 @@ public class FavoritesActivity extends AppCompatActivity implements PostAdapter.
             @Override
             public void afterTextChanged(Editable s) {}
         });
+
+        // Add Enter key action to perform search and hide keyboard
+        searchEditText.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH ||
+                actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE ||
+                (event != null && event.getKeyCode() == android.view.KeyEvent.KEYCODE_ENTER)) {
+
+                // Hide keyboard
+                android.view.inputmethod.InputMethodManager imm =
+                    (android.view.inputmethod.InputMethodManager) getSystemService(android.content.Context.INPUT_METHOD_SERVICE);
+                if (imm != null) {
+                    imm.hideSoftInputFromWindow(searchEditText.getWindowToken(), 0);
+                }
+
+                // Perform search
+                currentSearchQuery = searchEditText.getText().toString().trim();
+                applyFilters();
+
+                return true;
+            }
+            return false;
+        });
     }
 
     /**
@@ -113,120 +130,57 @@ public class FavoritesActivity extends AppCompatActivity implements PostAdapter.
      * Uses LiveData to automatically update when favorites change
      */
     private void loadFavoritePosts() {
+        // Always hide category filters on Favorites screen
+
         // Observe favorite posts - this will automatically update in real-time
         viewModel.getFavoritePosts().observe(this, favorites -> {
             if (favorites != null) {
-                allFavorites = new ArrayList<>(favorites);
+                // Defensive: ensure only truly favorited items are used (guard against DB issues)
+                List<Post> realFavorites = favorites.stream()
+                        .filter(Post::isFavorite)
+                        .collect(java.util.stream.Collectors.toList());
 
-                if (favorites.isEmpty()) {
+                allFavorites = new ArrayList<>(realFavorites);
+
+                // Update search bar visibility based on favorites count
+                updateSearchBarVisibility(realFavorites.size());
+
+                if (realFavorites.isEmpty()) {
+                    // Clear adapter to avoid showing stale data
+                    adapter.setPosts(new ArrayList<>());
                     showEmptyState();
                 } else {
                     hideEmptyState();
-                    updateCategoryFilters(favorites);
                     applyFilters();
                 }
             } else {
+                updateSearchBarVisibility(0);
                 showEmptyState();
             }
         });
     }
 
     /**
-     * Update category chips based on available favorite posts
-     * Categories are automatically derived from the favorited posts
+     * Show or hide search bar based on number of favorites
+     * Only show search when there are 3 or more favorites
      */
-    private void updateCategoryFilters(List<Post> favorites) {
-        // Extract unique categories from favorites
-        Set<String> categories = new HashSet<>();
-        for (Post post : favorites) {
-            if (post.getCategory() != null && !post.getCategory().isEmpty()) {
-                categories.add(post.getCategory());
-            }
-        }
-
-        // Clear existing chips
-        categoryChipGroup.removeAllViews();
-
-        // Add "All" chip
-        Chip allChip = createCategoryChip("All", true);
-        categoryChipGroup.addView(allChip);
-
-        // Add category chips (sorted)
-        List<String> sortedCategories = new ArrayList<>(categories);
-        sortedCategories.sort(String::compareTo);
-
-        for (String category : sortedCategories) {
-            Chip chip = createCategoryChip(category, false);
-            categoryChipGroup.addView(chip);
-        }
-
-        // If only one category exists besides "All", hide the chip group
-        if (categories.size() <= 1) {
-            categoryChipGroup.setVisibility(View.GONE);
-        } else {
-            categoryChipGroup.setVisibility(View.VISIBLE);
-        }
-    }
-
-    private Chip createCategoryChip(String category, boolean isChecked) {
-        Chip chip = new Chip(this);
-        chip.setText(category);
-        chip.setCheckable(true);
-        chip.setChecked(isChecked);
-        chip.setChipBackgroundColorResource(R.color.chip_background);
-        chip.setTextColor(getResources().getColor(R.color.chip_text, null));
-
-        chip.setOnCheckedChangeListener((buttonView, isCheckedNow) -> {
-            // Prevent recursive calls
-            if (!buttonView.isPressed()) return;
-
-            if (category.equals("All")) {
-                // "All" chip behavior: clear all selections and reset to all
-                if (isCheckedNow) {
-                    // Uncheck all other chips
-                    for (int i = 0; i < categoryChipGroup.getChildCount(); i++) {
-                        Chip otherChip = (Chip) categoryChipGroup.getChildAt(i);
-                        if (otherChip != chip && otherChip.isChecked()) {
-                            otherChip.setChecked(false);
-                        }
-                    }
-                    selectedCategories.clear();
-                } else {
-                    // "All" cannot be unchecked manually - keep it checked if nothing else is selected
-                    if (selectedCategories.isEmpty()) {
-                        chip.setChecked(true);
-                    }
-                }
+    private void updateSearchBarVisibility(int favoritesCount) {
+        if (searchCardView != null) {
+            if (favoritesCount >= 3) {
+                searchCardView.setVisibility(View.VISIBLE);
             } else {
-                // Regular category chip behavior
-                if (isCheckedNow) {
-                    // Uncheck "All" when selecting a specific category
-                    Chip allChip = (Chip) categoryChipGroup.getChildAt(0);
-                    if (allChip.isChecked()) {
-                        allChip.setChecked(false);
-                    }
-                    // Add to selected categories
-                    selectedCategories.add(category);
-                } else {
-                    // Remove from selected categories
-                    selectedCategories.remove(category);
-
-                    // If no categories selected, check "All"
-                    if (selectedCategories.isEmpty()) {
-                        Chip allChip = (Chip) categoryChipGroup.getChildAt(0);
-                        allChip.setChecked(true);
-                    }
+                searchCardView.setVisibility(View.GONE);
+                // Clear search query when hiding search bar
+                if (!currentSearchQuery.isEmpty()) {
+                    currentSearchQuery = "";
+                    searchEditText.setText("");
                 }
             }
-
-            applyFilters();
-        });
-
-        return chip;
+        }
     }
 
     /**
-     * Apply search and category filters to the favorite posts
+     * Apply search filter to the favorite posts
      * Filters are applied client-side on the in-memory list
      */
     private void applyFilters() {
@@ -237,20 +191,14 @@ public class FavoritesActivity extends AppCompatActivity implements PostAdapter.
 
         List<Post> filteredPosts = new ArrayList<>(allFavorites);
 
-        // Apply category filter (for multiple selected categories)
-        if (!selectedCategories.isEmpty()) {
-            filteredPosts = filteredPosts.stream()
-                    .filter(post -> selectedCategories.contains(post.getCategory()))
-                    .collect(Collectors.toList());
-        }
-
-        // Apply search filter
+        // Apply search filter (search by book title only - null-safe)
         if (!currentSearchQuery.isEmpty()) {
             String query = currentSearchQuery.toLowerCase();
             filteredPosts = filteredPosts.stream()
-                    .filter(post ->
-                            post.getTitle().toLowerCase().contains(query) ||
-                            post.getBody().toLowerCase().contains(query))
+                    .filter(post -> {
+                        String title = post.getTitle() != null ? post.getTitle().toLowerCase() : "";
+                        return title.contains(query);
+                    })
                     .collect(Collectors.toList());
         }
 
@@ -258,8 +206,6 @@ public class FavoritesActivity extends AppCompatActivity implements PostAdapter.
         if (filteredPosts.isEmpty()) {
             if (!currentSearchQuery.isEmpty()) {
                 showEmptyState("No favorites found for \"" + currentSearchQuery + "\"");
-            } else if (!selectedCategories.isEmpty()) {
-                showEmptyState("No favorites in selected categories");
             } else {
                 showEmptyState();
             }
@@ -279,7 +225,7 @@ public class FavoritesActivity extends AppCompatActivity implements PostAdapter.
 
     private void showEmptyState() {
         showEmptyState("You have no favorites yet.\n\n" +
-                "Tap the star on any post to add it to your favorites!");
+                "Tap the star on any book to add it to your favorites!");
     }
 
     private void showEmptyState(String message) {
@@ -307,4 +253,3 @@ public class FavoritesActivity extends AppCompatActivity implements PostAdapter.
         // due to LiveData observation - no manual refresh needed!
     }
 }
-
