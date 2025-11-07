@@ -5,7 +5,10 @@ import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.View;
+import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -20,6 +23,7 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 import com.example.nguyenduyhung_se184681.adapter.PostAdapter;
 import com.example.nguyenduyhung_se184681.model.Post;
 import com.example.nguyenduyhung_se184681.repository.PostRepository;
+import com.example.nguyenduyhung_se184681.util.NetworkUtils;
 import com.example.nguyenduyhung_se184681.viewmodel.PostViewModel;
 import com.google.android.material.chip.Chip;
 import com.google.android.material.chip.ChipGroup;
@@ -48,7 +52,11 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
     // UI Components
     private RecyclerView recyclerView;
     private ProgressBar progressBar;
+    private LinearLayout errorContainer;
     private TextView errorTextView;
+    private TextView networkStatusText;
+    private ImageView errorIcon;
+    private Button retryButton;
     private SwipeRefreshLayout swipeRefreshLayout;
     private EditText searchEditText;
     private ChipGroup categoryChipGroup;
@@ -107,7 +115,11 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
     private void initViews() {
         recyclerView = findViewById(R.id.recycler_view);
         progressBar = findViewById(R.id.progress_bar);
+        errorContainer = findViewById(R.id.error_container);
         errorTextView = findViewById(R.id.error_text);
+        networkStatusText = findViewById(R.id.network_status_text);
+        errorIcon = findViewById(R.id.error_icon);
+        retryButton = findViewById(R.id.retry_button);
         swipeRefreshLayout = findViewById(R.id.swipe_refresh_layout);
         searchEditText = findViewById(R.id.search_edit_text);
         categoryChipGroup = findViewById(R.id.category_chip_group);
@@ -117,6 +129,11 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
         findViewById(R.id.fab_favorites).setOnClickListener(v -> {
             Intent intent = new Intent(MainActivity.this, FavoritesActivity.class);
             startActivity(intent);
+        });
+
+        // Setup retry button
+        retryButton.setOnClickListener(v -> {
+            loadData();
         });
     }
 
@@ -447,18 +464,51 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
     }
 
     private void loadData() {
+        // Check network status first
+        boolean hasNetwork = NetworkUtils.isNetworkAvailable(this);
+
         // Check if database is empty
         viewModel.isDatabaseEmpty(isEmpty -> {
-            if (isEmpty) {
-                // Fetch from API
-                runOnUiThread(() -> {
-                    showLoading();
-                    fetchFromApi();
-                });
-            } else {
-                // Load from database
-                runOnUiThread(this::applyFilters);
-            }
+            runOnUiThread(() -> {
+                if (isEmpty) {
+                    // Database is empty - need to fetch from API
+                    if (hasNetwork) {
+                        // Has network - fetch from API
+                        showLoading();
+                        fetchFromApi();
+                    } else {
+                        // No network and no cached data - show error
+                        showError(
+                            "No internet connection",
+                            "Cannot load data. Please connect to the internet and try again.",
+                            true
+                        );
+                    }
+                } else {
+                    // Database has data
+                    if (hasNetwork) {
+                        // Has network - load from cache first, then refresh in background
+                        applyFilters();
+                        // Silently refresh data in background
+                        viewModel.fetchPostsFromApi(new PostRepository.FetchCallback() {
+                            @Override
+                            public void onSuccess() {
+                                // Data refreshed silently
+                            }
+
+                            @Override
+                            public void onError(String message) {
+                                // Ignore error - we already have cached data
+                            }
+                        });
+                    } else {
+                        // No network - load from cache with warning
+                        applyFilters();
+                        Toast.makeText(MainActivity.this,
+                                "Offline mode: Showing cached data", Toast.LENGTH_SHORT).show();
+                    }
+                }
+            });
         });
     }
 
@@ -478,15 +528,29 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
             public void onError(String message) {
                 runOnUiThread(() -> {
                     hideLoading();
+                    // Check network status
+                    boolean hasNetwork = NetworkUtils.isNetworkAvailable(MainActivity.this);
+
                     // Try to load from cache anyway
                     viewModel.isDatabaseEmpty(isEmpty -> {
-                        if (isEmpty) {
-                            showError("Could not load data. Please check your connection.");
-                        } else {
-                            applyFilters();
-                            Toast.makeText(MainActivity.this,
-                                    "Showing cached data", Toast.LENGTH_SHORT).show();
-                        }
+                        runOnUiThread(() -> {
+                            if (isEmpty) {
+                                // No cached data - show error
+                                String networkStatus = hasNetwork ?
+                                    "Connected but unable to load data" :
+                                    "No internet connection";
+                                showError(
+                                    networkStatus,
+                                    "Could not load data: " + message,
+                                    true
+                                );
+                            } else {
+                                // Has cached data - show it with warning
+                                applyFilters();
+                                Toast.makeText(MainActivity.this,
+                                        "Network error. Showing cached data", Toast.LENGTH_SHORT).show();
+                            }
+                        });
                     });
                 });
             }
@@ -494,6 +558,14 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
     }
 
     private void refreshData() {
+        // Check network before attempting refresh
+        if (!NetworkUtils.isNetworkAvailable(this)) {
+            swipeRefreshLayout.setRefreshing(false);
+            Toast.makeText(this,
+                "No internet connection. Cannot refresh.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
         viewModel.fetchPostsFromApi(new PostRepository.FetchCallback() {
             @Override
             public void onSuccess() {
@@ -564,7 +636,7 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
      */
     private void filterAndDisplayPosts() {
         if (allPostsCache.isEmpty()) {
-            showError("No books available");
+            showError("No data", "No books available", false);
             return;
         }
 
@@ -593,15 +665,18 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
             adapter.setPosts(filteredPosts);
             showContent();
         } else {
+            String title = "No results";
+            String message;
             if (showFavoritesOnly) {
-                showError("No favorites yet.\nTap the star on any book to add it to favorites!");
+                message = "No favorites yet.\nTap the star on any book to add it to favorites!";
             } else if (!currentSearchQuery.isEmpty()) {
-                showError("No books found for \"" + currentSearchQuery + "\"");
+                message = "No books found for \"" + currentSearchQuery + "\"";
             } else if (!selectedCategories.isEmpty()) {
-                showError("No books found in selected categories");
+                message = "No books found in selected categories";
             } else {
-                showError("No books available");
+                message = "No books available";
             }
+            showError(title, message, false);
         }
     }
 
@@ -616,7 +691,7 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
     private void showLoading() {
         progressBar.setVisibility(View.VISIBLE);
         recyclerView.setVisibility(View.GONE);
-        errorTextView.setVisibility(View.GONE);
+        errorContainer.setVisibility(View.GONE);
     }
 
     private void hideLoading() {
@@ -626,14 +701,30 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
     private void showContent() {
         progressBar.setVisibility(View.GONE);
         recyclerView.setVisibility(View.VISIBLE);
-        errorTextView.setVisibility(View.GONE);
+        errorContainer.setVisibility(View.GONE);
     }
 
-    private void showError(String message) {
+    private void showError(String networkStatus, String message, boolean showRetryButton) {
         progressBar.setVisibility(View.GONE);
         recyclerView.setVisibility(View.GONE);
-        errorTextView.setVisibility(View.VISIBLE);
+        errorContainer.setVisibility(View.VISIBLE);
+
+        // Update error text
         errorTextView.setText(message);
+
+        // Update network status
+        networkStatusText.setText(networkStatus);
+
+        // Show/hide retry button
+        retryButton.setVisibility(showRetryButton ? View.VISIBLE : View.GONE);
+
+        // Update icon based on error type
+        if (networkStatus.toLowerCase().contains("no internet") ||
+            networkStatus.toLowerCase().contains("no connection")) {
+            errorIcon.setImageResource(android.R.drawable.stat_notify_error);
+        } else {
+            errorIcon.setImageResource(android.R.drawable.ic_dialog_alert);
+        }
     }
 
     @Override

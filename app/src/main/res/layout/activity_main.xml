@@ -122,18 +122,61 @@
         android:layout_gravity="center"
         android:visibility="gone" />
 
-    <!-- Error Text (shown on error) -->
-    <TextView
-        android:id="@+id/error_text"
+    <!-- Error State Container -->
+    <LinearLayout
+        android:id="@+id/error_container"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
+        android:orientation="vertical"
+        android:gravity="center"
         android:padding="24dp"
-        android:text="Could not load data.\nPlease check your connection."
-        android:textAlignment="center"
-        android:textColor="#D32F2F"
-        android:textSize="16sp"
-        android:visibility="gone" />
+        android:visibility="gone">
+
+        <!-- Error Icon -->
+        <ImageView
+            android:id="@+id/error_icon"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:src="@android:drawable/stat_notify_error"
+            android:tint="#D32F2F"
+            android:contentDescription="Error icon" />
+
+        <!-- Error Text -->
+        <TextView
+            android:id="@+id/error_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Could not load data.\nPlease check your connection."
+            android:textAlignment="center"
+            android:textColor="#D32F2F"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <!-- Network Status Text -->
+        <TextView
+            android:id="@+id/network_status_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="No internet connection"
+            android:textAlignment="center"
+            android:textColor="#666666"
+            android:textSize="14sp" />
+
+        <!-- Retry Button -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/retry_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="🔄 Retry"
+            android:textAllCaps="false"
+            app:cornerRadius="8dp"
+            app:backgroundTint="#2196F3" />
+
+    </LinearLayout>
 
     <!-- Floating Action Button to open Favorites -->
     <com.google.android.material.floatingactionbutton.FloatingActionButton
