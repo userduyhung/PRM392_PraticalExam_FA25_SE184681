@@ -61,11 +61,13 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
     private EditText searchEditText;
     private ChipGroup categoryChipGroup;
     private ChipGroup filterChipGroup;
+    private ChipGroup sortChipGroup;
 
     // State
     private String currentSearchQuery = "";
     private Set<String> selectedCategories = new HashSet<>();
     private boolean showFavoritesOnly = false;
+    private String sortOrder = "newest"; // "newest", "oldest", "title"
     // Keep reference to currently observed LiveData so we can remove observers cleanly
     private androidx.lifecycle.LiveData<java.util.List<Post>> activePostsLiveData = null;
     // Keep reference to category "All" chip to avoid ID conflict with filter "All" chip
@@ -88,6 +90,7 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
             }
             showFavoritesOnly = savedInstanceState.getBoolean("showFavoritesOnly", false);
             currentSearchQuery = savedInstanceState.getString("currentSearchQuery", "");
+            sortOrder = savedInstanceState.getString("sortOrder", "newest");
         }
 
         // Initialize ViewModel
@@ -124,6 +127,7 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
         searchEditText = findViewById(R.id.search_edit_text);
         categoryChipGroup = findViewById(R.id.category_chip_group);
         filterChipGroup = findViewById(R.id.filter_chip_group);
+        sortChipGroup = findViewById(R.id.sort_chip_group);
 
         // Setup FAB for Favorites navigation
         findViewById(R.id.fab_favorites).setOnClickListener(v -> {
@@ -153,7 +157,10 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
             @Override
             public void onTextChanged(CharSequence s, int start, int before, int count) {
                 currentSearchQuery = s.toString().trim();
+                // Apply filters with real-time search
                 applyFilters();
+                // Update search status visibility
+                updateSearchStatus();
             }
 
             @Override
@@ -176,11 +183,40 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
                 // Perform search
                 currentSearchQuery = searchEditText.getText().toString().trim();
                 applyFilters();
+                updateSearchStatus();
 
                 return true;
             }
             return false;
         });
+
+        // Setup clear search button if exists
+        setupClearSearchButton();
+    }
+
+    /**
+     * Setup clear search button functionality
+     */
+    private void setupClearSearchButton() {
+        ImageView clearSearchBtn = findViewById(R.id.clear_search_btn);
+        if (clearSearchBtn != null) {
+            clearSearchBtn.setOnClickListener(v -> {
+                searchEditText.setText("");
+                currentSearchQuery = "";
+                applyFilters();
+                updateSearchStatus();
+            });
+        }
+    }
+
+    /**
+     * Update search status visibility based on current search query
+     */
+    private void updateSearchStatus() {
+        ImageView clearSearchBtn = findViewById(R.id.clear_search_btn);
+        if (clearSearchBtn != null) {
+            clearSearchBtn.setVisibility(!currentSearchQuery.isEmpty() ? View.VISIBLE : View.GONE);
+        }
     }
 
     private void setupFilters() {
@@ -217,6 +253,36 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
                     }
                 }
 
+                applyFilters();
+            }
+        });
+
+        // Setup Sort filter
+        sortChipGroup.setOnCheckedStateChangeListener((group, checkedIds) -> {
+            // If no chips are checked, keep current state
+            if (checkedIds.isEmpty()) {
+                // Restore the previously selected chip based on sortOrder
+                if ("oldest".equals(sortOrder)) {
+                    sortChipGroup.check(R.id.chip_sort_oldest);
+                } else if ("title".equals(sortOrder)) {
+                    sortChipGroup.check(R.id.chip_sort_title);
+                } else {
+                    sortChipGroup.check(R.id.chip_sort_newest);
+                }
+                return;
+            }
+
+            int checkedId = checkedIds.get(0);
+            String newSortOrder = "newest";
+            if (checkedId == R.id.chip_sort_oldest) {
+                newSortOrder = "oldest";
+            } else if (checkedId == R.id.chip_sort_title) {
+                newSortOrder = "title";
+            }
+
+            // Only update if sort order actually changed
+            if (!newSortOrder.equals(sortOrder)) {
+                sortOrder = newSortOrder;
                 applyFilters();
             }
         });
@@ -649,15 +715,37 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
                     .collect(Collectors.toList());
         }
 
-        // Apply search filter (search by book title only - null-safe and case-insensitive)
+        // Apply search filter (filter by book title - null-safe, case-insensitive, with word matching)
         if (!currentSearchQuery.isEmpty()) {
             String query = currentSearchQuery.toLowerCase();
             filteredPosts = filteredPosts.stream()
                     .filter(post -> {
                         String title = post.getTitle() != null ? post.getTitle().toLowerCase() : "";
+                        // Match if query is contained in title
                         return title.contains(query);
                     })
                     .collect(Collectors.toList());
+        }
+
+        // Apply sort order
+        switch (sortOrder) {
+            case "oldest":
+                // Sort by ID ascending (oldest first)
+                filteredPosts.sort((p1, p2) -> Integer.compare(p1.getId(), p2.getId()));
+                break;
+            case "title":
+                // Sort by title A-Z
+                filteredPosts.sort((p1, p2) -> {
+                    String title1 = p1.getTitle() != null ? p1.getTitle() : "";
+                    String title2 = p2.getTitle() != null ? p2.getTitle() : "";
+                    return title1.compareToIgnoreCase(title2);
+                });
+                break;
+            case "newest":
+            default:
+                // Sort by ID descending (newest first)
+                filteredPosts.sort((p1, p2) -> Integer.compare(p2.getId(), p1.getId()));
+                break;
         }
 
         // Update UI based on results
@@ -668,9 +756,15 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
             String title = "No results";
             String message;
             if (showFavoritesOnly) {
-                message = "No favorites yet.\nTap the star on any book to add it to favorites!";
+                if (!currentSearchQuery.isEmpty()) {
+                    message = "No favorites found for \"" + currentSearchQuery + "\"";
+                } else if (!selectedCategories.isEmpty()) {
+                    message = "No favorites in selected categories";
+                } else {
+                    message = "No favorites yet.\nTap the star on any book to add it to favorites!";
+                }
             } else if (!currentSearchQuery.isEmpty()) {
-                message = "No books found for \"" + currentSearchQuery + "\"";
+                message = "No books found matching \"" + currentSearchQuery + "\"";
             } else if (!selectedCategories.isEmpty()) {
                 message = "No books found in selected categories";
             } else {
@@ -747,6 +841,7 @@ public class MainActivity extends AppCompatActivity implements PostAdapter.OnPos
         outState.putStringArrayList("selectedCategories", new ArrayList<>(selectedCategories));
         outState.putBoolean("showFavoritesOnly", showFavoritesOnly);
         outState.putString("currentSearchQuery", currentSearchQuery);
+        outState.putString("sortOrder", sortOrder);
         android.util.Log.d("MainActivity", "Saved state: selectedCategories=" + selectedCategories);
     }
 }
